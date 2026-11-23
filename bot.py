@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import requests
 from bs4 import BeautifulSoup
 from intelligence import inspect_html, inspect_javascript, load_promotions
+from gemini_analysis import Gemini
 
 BASE = "https://www.cclonline.com/"
 UA = "CCLMohawkMonitor/1.0 (personal clue monitoring)"
@@ -92,6 +93,7 @@ class Finder:
         self.last_request = 0.0
         self.blocked = False
         self.promotions = load_promotions()
+        self.gemini = Gemini()
         self.scanned_scripts = set()
 
     def alert_once(self, kind, key, message):
@@ -127,6 +129,25 @@ class Finder:
             log.exception("Fetch failed: %s", url)
             return None
 
+    def ai_review(self, url, excerpt, source, image=None, mime="image/jpeg"):
+        key = hashlib.sha256((url + source + excerpt).encode()).hexdigest()
+        if self.db.execute("select 1 from seen where kind=? and value=?", ("ai_reviewed", key)).fetchone():
+            return
+        result = self.gemini.analyze(url=url, excerpt=excerpt, image=image, mime=mime)
+        if result is None:
+            return
+        self.db.execute("insert or ignore into seen values (?,?)", ("ai_reviewed", key))
+        self.db.commit()
+        if result["relevant"] and result["confidence"] >= .7:
+            message = ("GEMINI POSSIBLE CCL CLUE (NOT CONFIRMED)\n"
+                + "Confidence: " + str(round(result["confidence"]*100)) + "%\n"
+                + "Reason: " + result["reason"] + "\n"
+                + "Clue: " + result["clue"] + "\n" + url)
+            self.alert_once("ai_candidate", key, message)
+            for term in result["suggested_keywords"]:
+                if term.lower() not in [p.lower() for p in self.promotions] and len(self.promotions) < 30:
+                    self.promotions.append(term)
+
     def cycle(self):
         todo = sorted(set(self.queue), key=lambda x: -x[1])
         self.queue = []
@@ -141,6 +162,10 @@ class Finder:
             self.db.execute("insert or replace into snapshots values (?,?)", ("source:" + url, source_digest))
             self.db.commit()
             findings, scripts = inspect_html(html, url, self.promotions)
+            if source_changed and findings:
+                strongest = findings[0]
+                if strongest["score"] >= 6:
+                    self.ai_review(url, strongest["excerpt"], strongest["source"])
             for finding in findings:
                 if source_changed and finding["score"] >= 6:
                     key = hashlib.sha256((url + finding["source"] + finding["excerpt"]).encode()).hexdigest()
@@ -185,6 +210,8 @@ class Finder:
             self.db.execute("insert or replace into snapshots values (?,?)", (url, digest))
             self.db.commit()
             if relevant and (previous is None or previous[0] != digest):
+                if not findings:
+                    self.ai_review(url, body[:1500], "page_text")
                 self.alert_once("clue", url + digest, "CCL CLUE / PAGE CHANGE\\n" + title[:180] + "\\n" + url)
             links = []
             for a in soup.select("a[href]"):
@@ -222,6 +249,7 @@ def visual_scan(soup, url, finder):
             score = logo_match(response.content)
             if score >= 12:
                 matches.append((image_url, target, context, score))
+                finder.ai_review(target, context or "Possible Mohawk logo image", "logo_image", response.content, response.headers.get("content-type", "image/jpeg").split(";")[0])
         except requests.RequestException:
             continue
     if os.getenv("ENABLE_BROWSER", "1") == "1":
