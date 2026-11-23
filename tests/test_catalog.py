@@ -32,3 +32,8 @@ def test_catalogue_links():
 def test_not_1_99():
     soup=BeautifulSoup('<div class="product-card"><a href="/gaming-pcs/test/">Gaming PC</a><span class="price">£1.99</span></div>',"html.parser")
     assert not price_candidates(soup,"https://www.cclonline.com/",safe_url)
+
+def test_disguised_one_pound_product():
+    from catalog import generic_one_pound_cards
+    soup=BeautifulSoup('<div class="product-card"><a href="/mystery-item/">Mystery Item</a><span class="price">£1.00</span></div>',"html.parser")
+    assert generic_one_pound_cards(soup,"https://www.cclonline.com/",safe_url)==[("Mystery Item","https://www.cclonline.com/mystery-item/")]
