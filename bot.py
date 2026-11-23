@@ -124,6 +124,8 @@ class Finder:
             soup = BeautifulSoup(html, "html.parser")
             for name, product_url in products(soup, url):
                 self.alert_once("product", product_url, "CCL £1 PC PRODUCT DETECTED\\n" + name + "\\n" + product_url)
+            if relevant_visual := (priority >= 65 or CLUE.search(soup.get_text(" ", strip=True)[:6000])):
+                visual_scan(soup, url, self)
             title = soup.title.get_text(" ", strip=True) if soup.title else ""
             body = soup.get_text(" ", strip=True)[:12000]
             relevant = bool(CLUE.search(title + " " + body))
@@ -147,6 +149,44 @@ class Finder:
         self.queue.extend([(BASE, 100), (urljoin(BASE, "all-deals/"), 80)])
         self.queue = sorted(set(self.queue), key=lambda x: -x[1])[:250]
         log.info("Cycle complete; queued %d pages", len(self.queue))
+
+
+# Visual scanning is optional at runtime but installed in the workflow.
+def visual_scan(soup, url, finder):
+    from vision import image_candidates, logo_match, browser_scan
+    matches = []
+    for image_url, target, context in image_candidates(soup, url)[:12]:
+        if not finder.robots.can_fetch(UA, image_url):
+            continue
+        wait = finder.last_request + max(2.0, float(os.getenv("REQUEST_DELAY_SECONDS", "3"))) - time.monotonic()
+        if wait > 0: time.sleep(wait)
+        finder.last_request = time.monotonic()
+        try:
+            response = finder.session.get(image_url, timeout=12, allow_redirects=False)
+            if response.status_code in (403, 429):
+                log.warning("Image access restricted; stopping image checks on %s", url)
+                break
+            if response.status_code != 200 or not response.headers.get("content-type", "").startswith("image/") or len(response.content) > 2_000_000:
+                continue
+            score = logo_match(response.content)
+            if score >= 12:
+                matches.append((image_url, target, context, score))
+        except requests.RequestException:
+            continue
+    if os.getenv("ENABLE_BROWSER", "1") == "1":
+        try:
+            rendered, rendered_matches = browser_scan(url)
+            if rendered:
+                for name, product_url in products(BeautifulSoup(rendered, "html.parser"), url):
+                    finder.alert_once("product", product_url, "CCL £1 PC PRODUCT DETECTED (rendered page)\\n" + name + "\\n" + product_url)
+            matches.extend(rendered_matches)
+        except Exception as exc:
+            log.warning("Optional browser scan unavailable: %s", exc)
+    for image_url, target, context, score in matches:
+        key = hashlib.sha256((url + image_url + target).encode()).hexdigest()
+        finder.alert_once("logo", key, "POSSIBLE CCL MOHAWK LOGO - CHECK LINK\\nPage: " + url + "\\nImage: " + image_url + "\\nCandidate link: " + target + "\\nContext: " + context[:250] + "\\nVisual match score: " + str(score) + "\\nVisual matches can be false positives.")
+        if safe_url(target, url):
+            finder.queue.append((safe_url(target, url), 120))
 
 def active():
     now = datetime.now(ZoneInfo("Europe/London"))
