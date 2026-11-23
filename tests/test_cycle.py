@@ -3,12 +3,14 @@ import sqlite3
 import time
 from unittest.mock import Mock
 from bot import Finder
+import catalogue_index as index
 
 def make_finder(html):
     f=Finder.__new__(Finder)
     f.db=sqlite3.connect(":memory:")
     f.db.execute("create table seen(kind text,value text,primary key(kind,value))")
     f.db.execute("create table snapshots(url text primary key,digest text)")
+    index.init(f.db)
     f.queue=[("https://www.cclonline.com/",100),("https://www.cclonline.com/other-item/",45)]
     f.last_scanned={}
     f.clue_sources=set()
