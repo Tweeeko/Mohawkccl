@@ -39,7 +39,9 @@ def test_complete_cycle_and_clue_trail(monkeypatch):
     assert f.fetch.call_count==2
     assert f.last_scanned
     f.cycle()
-    assert f.fetch.call_count==2
+    requested=[call.args[0] for call in f.fetch.call_args_list]
+    assert requested.count("https://www.cclonline.com/")==1
+    assert requested.count("https://www.cclonline.com/other-item/")==1
 
 def test_visible_pound_pc_alert(monkeypatch):
     monkeypatch.setenv("ENABLE_BROWSER","0")
