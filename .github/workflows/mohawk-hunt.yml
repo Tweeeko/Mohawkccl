@@ -45,7 +45,7 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
       - name: Check syntax
-        run: python -m py_compile bot.py vision.py intelligence.py gemini_analysis.py catalog.py
+        run: python -m py_compile bot.py vision.py intelligence.py gemini_analysis.py catalog.py catalogue_index.py
       - name: Validate Telegram configuration
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
