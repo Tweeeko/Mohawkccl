@@ -100,6 +100,7 @@ class Finder:
         self.scanned_scripts = set()
         self.last_scanned = {}
         self.clue_sources = set()
+        self.browser_checks = 0
         self.stats = {"pages":0,"errors":0,"candidates":0,"sitemaps":0}
         self.last_heartbeat = time.monotonic()
         self.discover_sitemaps(response.text if self.allowed else "")
@@ -218,6 +219,7 @@ class Finder:
 
     def cycle(self):
         now = time.monotonic()
+        self.browser_checks = 0
         pending = sorted(set(self.queue), key=lambda x: -x[1])
         # Rotate across the catalogue rather than rescanning the same high-priority pages.
         todo = [item for item in pending if now-self.last_scanned.get(item[0],-1e9)>=600]
@@ -295,8 +297,9 @@ class Finder:
             for name, product_url in products(soup, url):
                 self.stats["candidates"] += 1
                 self.alert_once("product", product_url, "CCL £1 PC PRODUCT DETECTED (structured data, verify live)\n" + name + "\n" + product_url)
-            if (source_changed and (CLUE.search(soup.get_text(" ", strip=True)[:6000])
+            if (self.browser_checks < 2 and source_changed and (CLUE.search(soup.get_text(" ", strip=True)[:6000])
                     or catalog_priority(url) >= 95 or (priority == 45 and self.stats["pages"] % 8 == 0))):
+                self.browser_checks += 1
                 visual_scan(soup, url, self)
             body = soup.get_text(" ", strip=True)[:12000]
             relevant = bool(CLUE.search(title + " " + body))
@@ -395,6 +398,14 @@ def main():
     if not os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("DRY_RUN") != "1":
         raise SystemExit("Configure TELEGRAM_BOT_TOKEN in GitHub Actions secrets")
     finder = Finder()
+    if os.getenv("BASELINE_ONLY") == "1":
+        deadline=time.monotonic()+max(60,min(3600,int(os.getenv("BASELINE_SECONDS","2400"))))
+        log.info("Building public catalogue baseline for %s seconds",int(deadline-time.monotonic()))
+        while time.monotonic()<deadline and not finder.blocked:
+            finder.cycle()
+            time.sleep(5)
+        log.info("Baseline finished: %s",index.counts(finder.db))
+        return
     while True:
         if active():
             if finder.blocked:
