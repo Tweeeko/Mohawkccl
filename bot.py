@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from intelligence import inspect_html, inspect_javascript, load_promotions
 from gemini_analysis import Gemini
 from catalog import sitemap_urls, sitemap_seeds, priority as catalog_priority, catalog_links, price_candidates
+import catalogue_index as index
 
 BASE = "https://www.cclonline.com/"
 UA = "CCLMohawkMonitor/1.0 (personal clue monitoring)"
@@ -78,6 +79,7 @@ class Finder:
         self.db.execute("create table if not exists seen (kind text, value text, primary key(kind,value))")
         self.db.execute("create table if not exists snapshots (url text primary key, digest text)")
         self.db.commit()
+        index.init(self.db)
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": UA, "Accept-Language": "en-GB,en;q=0.9"})
         self.robots = RobotFileParser()
@@ -101,6 +103,7 @@ class Finder:
         self.stats = {"pages":0,"errors":0,"candidates":0,"sitemaps":0}
         self.last_heartbeat = time.monotonic()
         self.discover_sitemaps(response.text if self.allowed else "")
+        self.queue.extend(index.pending(self.db,1000))
 
     def discover_sitemaps(self, robots_text):
         """Bounded sitemap traversal, robots compliant and fail-closed."""
@@ -129,6 +132,7 @@ class Finder:
         prioritized = sorted({u for u in found if safe_url(u)},key=lambda u:-catalog_priority(u))
         high = [u for u in prioritized if catalog_priority(u) >= 65]
         broad = [u for u in prioritized if catalog_priority(u) < 65]
+        index.discover(self.db,found)
         self.queue.extend((u,catalog_priority(u)) for u in high[:850])
         self.queue.extend((u,45) for u in broad[:650])
         self.queue = sorted(set(self.queue),key=lambda x:-x[1])[:1500]
@@ -143,7 +147,11 @@ class Finder:
     def heartbeat(self, force=False):
         if not force and time.monotonic()-self.last_heartbeat < 900: return
         self.last_heartbeat = time.monotonic()
+        total,checked,edges=index.counts(self.db)
         message = ("CCL Mohawk Finder STATUS\n"
+                   + "Catalogue URLs: " + str(total) + "\n"
+                   + "Unique pages checked: " + str(checked) + "\n"
+                   + "Clue links: " + str(edges) + "\n"
                    + "Pages fetched: " + str(self.stats["pages"]) + "\n"
                    + "Sitemaps: " + str(self.stats["sitemaps"]) + "\n"
                    + "Candidates: " + str(self.stats["candidates"]) + "\n"
@@ -268,16 +276,28 @@ class Finder:
                     log.warning("Script scan failed: %s", script_url)
             if self.blocked: break
             soup = BeautifulSoup(html, "html.parser")
+            title = soup.title.get_text(" ",strip=True) if soup.title else ""
+            page_event = index.record(self.db,url,title,digest=source_digest,
+                clue=bool(CLUE.search(title+" "+soup.get_text(" ",strip=True)[:12000])))
+            if page_event in ("new","changed"):
+                log.info("Catalogue %s: %s",page_event,url)
+            for card_url,card_title,card_price in index.extract_cards(soup,url,safe_url):
+                event = index.record(self.db,card_url,card_title,price=card_price or None)
+                self.queue.append((card_url,110 if event=="price_changed" else 85 if event=="new" else 45))
+                if event=="price_changed":
+                    self.stats["candidates"]+=1
+                    self.alert_once("price_change",card_url+card_price,
+                        "CCL PRODUCT PRICE CHANGE (verify)\n"+card_title+"\nNew displayed price: "+card_price+"\n"+card_url)
             for name, product_url in price_candidates(soup, url, safe_url):
                 self.stats["candidates"] += 1
                 self.alert_once("visible_price", product_url, "POSSIBLE £1 PC LISTING - VERIFY PRICE\n" + name + "\n" + product_url)
                 self.ai_review(product_url, name, "visible_price")
             for name, product_url in products(soup, url):
-                self.alert_once("product", product_url, "CCL £1 PC PRODUCT DETECTED\\n" + name + "\\n" + product_url)
+                self.stats["candidates"] += 1
+                self.alert_once("product", product_url, "CCL £1 PC PRODUCT DETECTED (structured data, verify live)\n" + name + "\n" + product_url)
             if (source_changed and (CLUE.search(soup.get_text(" ", strip=True)[:6000])
                     or catalog_priority(url) >= 95 or (priority == 45 and self.stats["pages"] % 8 == 0))):
                 visual_scan(soup, url, self)
-            title = soup.title.get_text(" ", strip=True) if soup.title else ""
             body = soup.get_text(" ", strip=True)[:12000]
             relevant = bool(CLUE.search(title + " " + body))
             digest = hashlib.sha256((title + body).encode()).hexdigest()
@@ -297,6 +317,11 @@ class Finder:
                 score = 100 if CLUE.search(label + " " + alt + " " + dest) else (65 if relevant else 10)
                 if score >= 65: links.append((dest, score))
             if relevant:
+                for a in soup.select("a[href]")[:300]:
+                    target=safe_url(a.get("href"),url)
+                    if target and (CLUE.search(a.get_text(" ",strip=True)) or CLUE.search(target)):
+                        index.connect(self.db,url,target,a.get_text(" ",strip=True))
+                        self.queue.append((target,120))
                 self.clue_sources.add(url)
                 log.info("Clue trail: %s (%d distinct pages)", url, len(self.clue_sources))
             self.queue.extend(links[:75])
@@ -309,6 +334,7 @@ class Finder:
         selected_set = set(selected)
         self.queue.extend(item for item in todo if item not in selected_set)
         self.queue.extend([(BASE, 100), (urljoin(BASE, "all-deals/"), 80)])
+        self.queue.extend(index.pending(self.db,300))
         high_queue = sorted({x for x in self.queue if x[1] >= 65}, key=lambda x:-x[1])
         low_queue = sorted({x for x in self.queue if x[1] < 65}, key=lambda x:x[0])
         self.queue = high_queue[:900] + low_queue[:600]
@@ -371,6 +397,10 @@ def main():
     finder = Finder()
     while True:
         if active():
+            if finder.blocked:
+                finder.heartbeat(force=True)
+                log.error("Access restriction detected; scan stopped")
+                break
             finder.cycle()
             time.sleep(max(30, int(os.getenv("CHECK_INTERVAL_SECONDS", "60"))))
         else:
