@@ -8,6 +8,7 @@ import requests
 from bs4 import BeautifulSoup
 from intelligence import inspect_html, inspect_javascript, load_promotions
 from gemini_analysis import Gemini
+from catalog import sitemap_urls, sitemap_seeds, priority as catalog_priority, catalog_links, price_candidates
 
 BASE = "https://www.cclonline.com/"
 UA = "CCLMohawkMonitor/1.0 (personal clue monitoring)"
@@ -95,6 +96,57 @@ class Finder:
         self.promotions = load_promotions()
         self.gemini = Gemini()
         self.scanned_scripts = set()
+        self.stats = {"pages":0,"errors":0,"candidates":0,"sitemaps":0}
+        self.last_heartbeat = time.monotonic()
+        self.discover_sitemaps(response.text if self.allowed else "")
+
+    def discover_sitemaps(self, robots_text):
+        """Bounded sitemap traversal, robots compliant and fail-closed."""
+        if not self.allowed: return
+        pending = sitemap_seeds(robots_text)
+        visited = set()
+        found = []
+        while pending and len(visited) < 15 and not self.blocked:
+            url = pending.pop(0)
+            if url in visited or not self.robots.can_fetch(UA,url): continue
+            visited.add(url)
+            self.throttle()
+            try:
+                r = self.session.get(url, timeout=18, allow_redirects=False)
+                if r.status_code in (403,429,503):
+                    self.blocked = True
+                    self.alert_once("blocked",url,"CCL sitemap access restricted: "+url)
+                    break
+                if r.status_code != 200 or len(r.content)>2_000_000: continue
+                children, pages = sitemap_urls(r.text)
+                pending.extend(children[:20])
+                found.extend(pages)
+                self.stats["sitemaps"] += 1
+            except requests.RequestException:
+                self.stats["errors"] += 1
+        prioritized = sorted({u for u in found if safe_url(u)},key=lambda u:-catalog_priority(u))
+        self.queue.extend((u,catalog_priority(u)) for u in prioritized[:1500])
+        self.queue = sorted(set(self.queue),key=lambda x:-x[1])[:1500]
+        log.info("Catalogue discovery: %d sitemap files, %d URLs, %d queued",
+                 self.stats["sitemaps"],len(found),len(self.queue))
+
+    def throttle(self):
+        wait = self.last_request + max(2.0,float(os.getenv("REQUEST_DELAY_SECONDS","3"))) - time.monotonic()
+        if wait > 0: time.sleep(wait)
+        self.last_request = time.monotonic()
+
+    def heartbeat(self, force=False):
+        if not force and time.monotonic()-self.last_heartbeat < 900: return
+        self.last_heartbeat = time.monotonic()
+        message = ("CCL Mohawk Finder STATUS\n"
+                   + "Pages fetched: " + str(self.stats["pages"]) + "\n"
+                   + "Sitemaps: " + str(self.stats["sitemaps"]) + "\n"
+                   + "Candidates: " + str(self.stats["candidates"]) + "\n"
+                   + "Errors: " + str(self.stats["errors"]) + "\n"
+                   + "Gemini calls: " + str(self.gemini.calls) + "\n"
+                   + "Queued pages: " + str(len(self.queue)) + "\n"
+                   + "Access blocked: " + str(self.blocked))
+        notify(message)
 
     def alert_once(self, kind, key, message):
         if self.db.execute("select 1 from seen where kind=? and value=?", (kind, key)).fetchone():
@@ -104,7 +156,7 @@ class Finder:
             self.db.commit()
 
     def fetch(self, url):
-        if not self.allowed or not self.robots.can_fetch(UA, url):
+        if self.blocked or not self.allowed or not self.robots.can_fetch(UA, url):
             return None
         delay = max(2.0, float(os.getenv("REQUEST_DELAY_SECONDS", "3")))
         wait = self.last_request + delay - time.monotonic()
@@ -124,8 +176,10 @@ class Finder:
                 self.blocked = True
                 self.alert_once("blocked", url, "CCL human verification detected. Open manually: " + url)
                 return None
+            self.stats["pages"] += 1
             return page
         except requests.RequestException:
+            self.stats["errors"] += 1
             log.exception("Fetch failed: %s", url)
             return None
 
@@ -198,6 +252,10 @@ class Finder:
                     log.warning("Script scan failed: %s", script_url)
             if self.blocked: break
             soup = BeautifulSoup(html, "html.parser")
+            for name, product_url in price_candidates(soup, url, safe_url):
+                self.stats["candidates"] += 1
+                self.alert_once("visible_price", product_url, "POSSIBLE £1 PC LISTING - VERIFY PRICE\n" + name + "\n" + product_url)
+                self.ai_review(product_url, name, "visible_price")
             for name, product_url in products(soup, url):
                 self.alert_once("product", product_url, "CCL £1 PC PRODUCT DETECTED\\n" + name + "\\n" + product_url)
             if relevant_visual := (priority >= 65 or CLUE.search(soup.get_text(" ", strip=True)[:6000])):
@@ -222,10 +280,12 @@ class Finder:
                 score = 100 if CLUE.search(label + " " + alt + " " + dest) else (65 if relevant else 10)
                 if score >= 65: links.append((dest, score))
             self.queue.extend(links[:75])
+            self.queue.extend(catalog_links(soup,url,safe_url)[:100])
             self.queue.append((url, priority))
         self.queue.extend(todo[limit:])
         self.queue.extend([(BASE, 100), (urljoin(BASE, "all-deals/"), 80)])
-        self.queue = sorted(set(self.queue), key=lambda x: -x[1])[:250]
+        self.queue = sorted(set(self.queue), key=lambda x: -x[1])[:1500]
+        self.heartbeat()
         log.info("Cycle complete; queued %d pages", len(self.queue))
 
 
