@@ -8,7 +8,7 @@ import requests
 from bs4 import BeautifulSoup
 from intelligence import inspect_html, inspect_javascript, load_promotions
 from gemini_analysis import Gemini
-from catalog import sitemap_urls, sitemap_seeds, priority as catalog_priority, catalog_links, price_candidates
+from catalog import sitemap_urls, sitemap_seeds, priority as catalog_priority, catalog_links, price_candidates, generic_one_pound_cards
 import catalogue_index as index
 
 BASE = "https://www.cclonline.com/"
@@ -290,6 +290,11 @@ class Finder:
                     self.stats["candidates"]+=1
                     self.alert_once("price_change",card_url+card_price,
                         "CCL PRODUCT PRICE CHANGE (verify)\n"+card_title+"\nNew displayed price: "+card_price+"\n"+card_url)
+            for name,product_url in generic_one_pound_cards(soup,url,safe_url):
+                self.stats["candidates"]+=1
+                self.alert_once("any_one_pound",product_url,
+                    "POSSIBLE £1 CCL PRODUCT (not verified as PC)\n"+name+"\n"+product_url)
+                self.queue.append((product_url,120))
             for name, product_url in price_candidates(soup, url, safe_url):
                 self.stats["candidates"] += 1
                 self.alert_once("visible_price", product_url, "POSSIBLE £1 PC LISTING - VERIFY PRICE\n" + name + "\n" + product_url)
