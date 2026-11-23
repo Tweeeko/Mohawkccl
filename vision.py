@@ -1,5 +1,5 @@
 """Best-effort visual clue detection for public CCL pages."""
-import io, os, re
+import io, os, re, atexit
 from urllib.parse import urljoin
 from urllib.parse import urlsplit, urlunsplit
 
@@ -57,29 +57,52 @@ def logo_match(raw):
     except Exception:
         return 0
 
+_playwright = None
+_browser = None
+
+def _get_browser():
+    global _playwright, _browser
+    if _browser is None:
+        from playwright.sync_api import sync_playwright
+        _playwright = sync_playwright().start()
+        _browser = _playwright.chromium.launch(headless=True,args=["--no-sandbox"])
+    return _browser
+
+def _close_browser():
+    global _playwright, _browser
+    if _browser:
+        _browser.close()
+        _browser = None
+    if _playwright:
+        _playwright.stop()
+        _playwright = None
+
+atexit.register(_close_browser)
+
 def browser_scan(url):
-    """Inspect rendered public DOM. No login, clicking or challenge solving."""
-    from playwright.sync_api import sync_playwright
-    matches = []
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
-        try:
-            page = browser.new_page(viewport={"width":1365,"height":900})
-            page.goto(url, wait_until="domcontentloaded", timeout=18000)
-            page.wait_for_timeout(900)
-            html = page.content()
-            for img in page.locator("img").all()[:30]:
-                try:
-                    if not img.is_visible(): continue
-                    src = img.get_attribute("src") or ""
-                    if not src: continue
-                    score = logo_match(img.screenshot(timeout=2500))
-                    if score < 12: continue
-                    parent = img.locator("xpath=ancestor::a[1]")
-                    href = parent.get_attribute("href") if parent.count() else url
-                    matches.append((urljoin(url,src),safe_url(href,url) or url,img.get_attribute("alt") or "",score))
-                except Exception:
-                    continue
-            return html,matches
-        finally:
-            browser.close()
+    """Reuse a single browser for public rendered pages; no challenge solving."""
+    matches=[]
+    browser=_get_browser()
+    page=browser.new_page(viewport={"width":1365,"height":900})
+    try:
+        page.goto(url,wait_until="domcontentloaded",timeout=18000)
+        page.wait_for_timeout(500)
+        html=page.content()
+        if re.search(r"cf-chl-|cf-turnstile|verify you are human|captcha",html[:12000],re.I):
+            return None,[]
+        for img in page.locator("img").all()[:20]:
+            try:
+                if not img.is_visible(): continue
+                src=img.get_attribute("src") or ""
+                if not src: continue
+                screenshot=img.screenshot(timeout=2500)
+                score=logo_match(screenshot)
+                if score < 12: continue
+                parent=img.locator("xpath=ancestor::a[1]")
+                href=parent.get_attribute("href") if parent.count() else url
+                matches.append((urljoin(url,src),safe_url(href,url) or url,img.get_attribute("alt") or "",score,screenshot))
+            except Exception:
+                continue
+        return html,matches
+    finally:
+        page.close()
