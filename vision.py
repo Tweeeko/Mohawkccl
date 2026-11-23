@@ -1,5 +1,5 @@
 """Best-effort visual clue detection for public CCL pages."""
-import io, os, re, atexit
+import io, os, re, atexit, base64
 from urllib.parse import urljoin
 from urllib.parse import urlsplit, urlunsplit
 
@@ -10,6 +10,7 @@ def safe_url(href, parent):
         return urlunsplit((p.scheme,p.netloc,p.path or '/',p.query,''))
     except ValueError: return None
 REF = os.path.join(os.path.dirname(__file__), "assets", "mohawk-reference.jpg")
+REF_B64 = os.path.join(os.path.dirname(__file__), "assets", "mohawk-reference.png.base64")
 
 def image_candidates(soup, url):
     result = []
@@ -28,6 +29,9 @@ def logo_match(raw):
     try:
         import cv2, numpy as np
         reference = cv2.imread(REF, cv2.IMREAD_GRAYSCALE) if os.path.exists(REF) else None
+        if reference is None and os.path.exists(REF_B64):
+            with open(REF_B64,encoding="ascii") as handle:
+                reference = cv2.imdecode(np.frombuffer(base64.b64decode(handle.read()),dtype=np.uint8),cv2.IMREAD_GRAYSCALE)
         target = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
         if target is None: return 0
         # Text-and-colour recognition works even without a stored reference image.
@@ -43,6 +47,11 @@ def logo_match(raw):
         if ("MOHAWK" in words and ("FOLLOW" in words or green > .04)) or ("FOLLOW THE MOHAWK" in words):
             return 20
         if reference is None: return 0
+        # Whole-logo perceptual match, robust to resizing, not partial occlusion.
+        if target.shape[0] >= 30 and target.shape[1] >= 30:
+            small=cv2.resize(target,(reference.shape[1],reference.shape[0]))
+            correlation=cv2.matchTemplate(small,reference,cv2.TM_CCOEFF_NORMED)[0,0]
+            if correlation > .80: return 20
         detector = cv2.ORB_create(nfeatures=1800, fastThreshold=8)
         points1, desc1 = detector.detectAndCompute(reference, None)
         points2, desc2 = detector.detectAndCompute(target, None)
