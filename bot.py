@@ -220,7 +220,11 @@ class Finder:
     def cycle(self):
         now = time.monotonic()
         self.browser_checks = 0
-        pending = sorted(set(self.queue), key=lambda x: -x[1])
+        # One entry per URL, retaining the highest priority.
+        by_url = {}
+        for queued_url, queued_priority in self.queue:
+            by_url[queued_url] = max(queued_priority, by_url.get(queued_url, 0))
+        pending = sorted(by_url.items(), key=lambda x: -x[1])
         # Rotate across the catalogue rather than rescanning the same high-priority pages.
         todo = [item for item in pending if now-self.last_scanned.get(item[0],-1e9)>=600]
         deferred = [item for item in pending if item not in todo]
@@ -295,7 +299,7 @@ class Finder:
                 self.alert_once("any_one_pound",product_url,
                     "POSSIBLE £1 CCL PRODUCT (not verified as PC)\n"+name+"\n"+product_url)
                 self.queue.append((product_url,120))
-            for name, product_url in price_candidates(soup, url, safe_url):
+            for name, product_url, _evidence in price_candidates(soup, url, safe_url):
                 self.stats["candidates"] += 1
                 self.alert_once("visible_price", product_url, "POSSIBLE £1 PC LISTING - VERIFY PRICE\n" + name + "\n" + product_url)
                 self.ai_review(product_url, name, "visible_price")
@@ -378,7 +382,7 @@ def visual_scan(soup, url, finder):
             rendered, rendered_matches = browser_scan(url)
             if rendered:
                 rendered_soup = BeautifulSoup(rendered, "html.parser")
-                for name, product_url in price_candidates(rendered_soup, url, safe_url):
+                for name, product_url, _evidence in price_candidates(rendered_soup, url, safe_url):
                     finder.stats["candidates"] += 1
                     finder.alert_once("rendered_price", product_url, "POSSIBLE £1 PC - RENDERED PRICE (VERIFY)\n" + name + "\n" + product_url)
                 for name, product_url in products(rendered_soup, url):
