@@ -1,7 +1,14 @@
 """Best-effort visual clue detection for public CCL pages."""
 import io, os, re
 from urllib.parse import urljoin
-from bot import safe_url, BASE
+from urllib.parse import urlsplit, urlunsplit
+
+def safe_url(href, parent):
+    try:
+        p = urlsplit(urljoin(parent, href))
+        if p.scheme != 'https' or p.hostname not in ('www.cclonline.com', 'cclonline.com'): return None
+        return urlunsplit((p.scheme,p.netloc,p.path or '/',p.query,''))
+    except ValueError: return None
 REF = os.path.join(os.path.dirname(__file__), "assets", "mohawk-reference.jpg")
 
 def image_candidates(soup, url):
@@ -20,9 +27,22 @@ def logo_match(raw):
     """ORB feature match with RANSAC homography; score is number of inliers."""
     try:
         import cv2, numpy as np
-        reference = cv2.imread(REF, cv2.IMREAD_GRAYSCALE)
+        reference = cv2.imread(REF, cv2.IMREAD_GRAYSCALE) if os.path.exists(REF) else None
         target = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
-        if reference is None or target is None: return 0
+        if target is None: return 0
+        # Text-and-colour recognition works even without a stored reference image.
+        import pytesseract
+        from PIL import Image
+        rgb = cv2.cvtColor(target, cv2.COLOR_GRAY2RGB)
+        original = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+        green = 0
+        if original is not None:
+            b,g,r = cv2.split(original)
+            green = float(((g.astype("int16") > r.astype("int16") + 35) & (g.astype("int16") > b.astype("int16") + 25) & (g > 80)).mean())
+        words = re.sub(r"[^A-Z ]", " ", pytesseract.image_to_string(Image.open(io.BytesIO(raw))).upper())
+        if ("MOHAWK" in words and ("FOLLOW" in words or green > .04)) or ("FOLLOW THE MOHAWK" in words):
+            return 20
+        if reference is None: return 0
         detector = cv2.ORB_create(nfeatures=1800, fastThreshold=8)
         points1, desc1 = detector.detectAndCompute(reference, None)
         points2, desc2 = detector.detectAndCompute(target, None)
