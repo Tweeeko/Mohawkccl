@@ -14,6 +14,7 @@ def make_finder(html):
     f.queue=[("https://www.cclonline.com/",100),("https://www.cclonline.com/other-item/",45)]
     f.last_scanned={}
     f.clue_sources=set()
+    f.browser_checks=0
     f.blocked=False
     f.allowed=True
     f.promotions=["Follow the Mohawk"]
