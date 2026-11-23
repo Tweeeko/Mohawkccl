@@ -21,6 +21,9 @@ jobs:
     env:
       PYTHONUNBUFFERED: '1'
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: 'gemini-2.5-flash'
+      GEMINI_MAX_CALLS: '35'
       TELEGRAM_CHAT_ID: '9228500165'
       TEST_TELEGRAM: ${{ inputs.test_telegram && '1' || '0' }}
       CHECK_INTERVAL_SECONDS: '60'
@@ -42,7 +45,7 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
       - name: Check syntax
-        run: python -m py_compile bot.py vision.py
+        run: python -m py_compile bot.py vision.py intelligence.py gemini_analysis.py
       - name: Validate Telegram configuration
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
