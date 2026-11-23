@@ -75,3 +75,18 @@ def catalog_links(soup, page_url, safe_url):
         if p>=65 or re.search(r"(?:[?&]page=|/page/\d+)",url,re.I):
             links.append((url,p))
     return sorted(set(links),key=lambda x:-x[1])[:300]
+
+
+def generic_one_pound_cards(soup,page_url,safe_url):
+    """Flag £1 products even when the item title does not mention a PC."""
+    found=[]
+    for node in soup.select('[data-product-id],[itemtype*="Product"],.product-card,.product-item,li[class*="product"]')[:500]:
+        price=node.select_one('[itemprop="price"],[class*="price"],[data-price]')
+        if price is None: continue
+        value=str(price.get("content") or price.get("data-price") or price.get_text(" ",strip=True))
+        if not (PRICE.search(value) or re.fullmatch(r"1(?:[.,]00)?",value.strip())): continue
+        a=node.select_one("a[href]")
+        if a is None: continue
+        url=safe_url(a.get("href"),page_url)
+        if url: found.append((a.get_text(" ",strip=True)[:180],url))
+    return list(dict.fromkeys(found))[:30]
