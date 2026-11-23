@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 from urllib.parse import urljoin, urlsplit
 from bs4 import BeautifulSoup
 
-PRICE = re.compile(r"(?<![\d])£\s*1(?:[.,]00)?(?![\d])")
+PRICE = re.compile(r"(?<![\d])£\s*1(?:[.,]00)?(?![\d.,])")
 PC = re.compile(r"gaming[\s-]*(?:pc|desktop|computer)|(?:desktop|prebuilt|custom)[\s-]*(?:pc|computer)|gaming[\s-]*system|pc[\s-]*bundle",re.I)
 HUNT = re.compile(r"mohawk|follow[\s-]*the[\s-]*mohawk|treasure[\s-]*hunt",re.I)
 CAT = re.compile(r"gaming|desktop|computer|prebuilt|pc|system|deal|sale|bundle|offer",re.I)
