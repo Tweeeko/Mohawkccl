@@ -28,3 +28,7 @@ def test_catalogue_links():
     soup=BeautifulSoup('<a href="/gaming-pcs/">Gaming PCs</a><a href="/account/">Account</a>',"html.parser")
     links=catalog_links(soup,"https://www.cclonline.com/",safe_url)
     assert links==[("https://www.cclonline.com/gaming-pcs/",95)]
+
+def test_not_1_99():
+    soup=BeautifulSoup('<div class="product-card"><a href="/gaming-pcs/test/">Gaming PC</a><span class="price">£1.99</span></div>',"html.parser")
+    assert not price_candidates(soup,"https://www.cclonline.com/",safe_url)
