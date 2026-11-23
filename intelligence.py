@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup, Comment
 KEYWORDS = re.compile(r"mohawk|follow[\s_-]*the[\s_-]*mohawk|treasure[\s_-]*hunt|£\s*1\b|one[\s_-]*pound|hidden[\s_-]*pc|gaming[\s_-]*pc", re.I)
 PROMO = re.compile(r"mohawk|follow[\s_-]*the[\s_-]*mohawk|treasure[\s_-]*hunt", re.I)
 GENERIC = re.compile(r"webpack|react|hydration|chunk|sourceMappingURL|node_modules|favicon|analytics|tracking|google-tag-manager", re.I)
-BASE64 = re.compile(r"(?<![A-Za-z0-9+/])(?:[A-Za-z0-9+/]{4}){5,}(?:==|=)?(?![A-Za-z0-9+/])")
+BASE64 = re.compile(r"(?<![A-Za-z0-9+/])(?:[A-Za-z0-9+/]{4}){4,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?(?![A-Za-z0-9+/])")
 ESCAPES = re.compile(r"\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2})")
 HEX = re.compile(r"(?<![0-9a-fA-F])(?:0x[0-9a-fA-F]{2}[\s,;]*){5,}")
 URL = re.compile(r"https?://[^\s\"'<>\\]+")
