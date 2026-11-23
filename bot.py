@@ -321,7 +321,10 @@ def visual_scan(soup, url, finder):
             matches.extend(rendered_matches)
         except Exception as exc:
             log.warning("Optional browser scan unavailable: %s", exc)
-    for image_url, target, context, score in matches:
+    for match in matches:
+        image_url, target, context, score = match[:4]
+        if len(match) > 4:
+            finder.ai_review(target, context or "Mohawk logo candidate", "rendered_image", match[4], "image/png")
         key = hashlib.sha256((url + image_url + target).encode()).hexdigest()
         finder.alert_once("logo", key, "POSSIBLE CCL MOHAWK LOGO - CHECK LINK\\nPage: " + url + "\\nImage: " + image_url + "\\nCandidate link: " + target + "\\nContext: " + context[:250] + "\\nVisual match score: " + str(score) + "\\nVisual matches can be false positives.")
         if safe_url(target, url):
