@@ -120,9 +120,15 @@ class Finder:
             try:
                 r = self.session.get(url, timeout=18, allow_redirects=False)
                 if r.status_code in (403,429,503):
-                    self.blocked = True
-                    self.alert_once("blocked",url,"CCL sitemap access restricted: "+url)
-                    break
+                    # A restricted sitemap does not prove that public HTML is blocked.
+                    # Never retry a restricted sitemap during this run.
+                    self.stats["errors"] += 1
+                    log.warning("Sitemap unavailable (HTTP %s): %s; continuing with permitted HTML discovery", r.status_code, url)
+                    if r.status_code == 429:
+                        self.blocked = True
+                        self.alert_once("blocked",url,"CCL rate limit on sitemap (HTTP 429); stopping requests: "+url)
+                        break
+                    continue
                 if r.status_code != 200 or len(r.content)>2_000_000: continue
                 children, pages = sitemap_urls(r.text)
                 pending.extend(children[:20])
