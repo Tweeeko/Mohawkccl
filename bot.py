@@ -96,6 +96,8 @@ class Finder:
         self.promotions = load_promotions()
         self.gemini = Gemini()
         self.scanned_scripts = set()
+        self.last_scanned = {}
+        self.clue_sources = set()
         self.stats = {"pages":0,"errors":0,"candidates":0,"sitemaps":0}
         self.last_heartbeat = time.monotonic()
         self.discover_sitemaps(response.text if self.allowed else "")
@@ -125,7 +127,10 @@ class Finder:
             except requests.RequestException:
                 self.stats["errors"] += 1
         prioritized = sorted({u for u in found if safe_url(u)},key=lambda u:-catalog_priority(u))
-        self.queue.extend((u,catalog_priority(u)) for u in prioritized[:1500])
+        high = [u for u in prioritized if catalog_priority(u) >= 65]
+        broad = [u for u in prioritized if catalog_priority(u) < 65]
+        self.queue.extend((u,catalog_priority(u)) for u in high[:850])
+        self.queue.extend((u,45) for u in broad[:650])
         self.queue = sorted(set(self.queue),key=lambda x:-x[1])[:1500]
         log.info("Catalogue discovery: %d sitemap files, %d URLs, %d queued",
                  self.stats["sitemaps"],len(found),len(self.queue))
@@ -145,6 +150,7 @@ class Finder:
                    + "Errors: " + str(self.stats["errors"]) + "\n"
                    + "Gemini calls: " + str(self.gemini.calls) + "\n"
                    + "Queued pages: " + str(len(self.queue)) + "\n"
+                   + "Clue pages: " + str(len(self.clue_sources)) + "\n"
                    + "Access blocked: " + str(self.blocked))
         notify(message)
 
@@ -263,7 +269,8 @@ class Finder:
                 self.ai_review(product_url, name, "visible_price")
             for name, product_url in products(soup, url):
                 self.alert_once("product", product_url, "CCL £1 PC PRODUCT DETECTED\\n" + name + "\\n" + product_url)
-            if relevant_visual := (priority >= 65 or CLUE.search(soup.get_text(" ", strip=True)[:6000])):
+            if (source_changed and (CLUE.search(soup.get_text(" ", strip=True)[:6000])
+                    or catalog_priority(url) >= 95 or (priority == 45 and self.stats["pages"] % 8 == 0))):
                 visual_scan(soup, url, self)
             title = soup.title.get_text(" ", strip=True) if soup.title else ""
             body = soup.get_text(" ", strip=True)[:12000]
@@ -284,12 +291,17 @@ class Finder:
                 alt = " ".join(img.get("alt", "") for img in a.select("img"))
                 score = 100 if CLUE.search(label + " " + alt + " " + dest) else (65 if relevant else 10)
                 if score >= 65: links.append((dest, score))
+            if relevant:
+                self.clue_sources.add(url)
+                log.info("Clue trail: %s (%d distinct pages)", url, len(self.clue_sources))
             self.queue.extend(links[:75])
             self.queue.extend(catalog_links(soup,url,safe_url)[:100])
             self.queue.append((url, priority))
         self.queue.extend(todo[limit:])
         self.queue.extend([(BASE, 100), (urljoin(BASE, "all-deals/"), 80)])
-        self.queue = sorted(set(self.queue), key=lambda x: -x[1])[:1500]
+        high_queue = sorted({x for x in self.queue if x[1] >= 65}, key=lambda x:-x[1])
+        low_queue = sorted({x for x in self.queue if x[1] < 65}, key=lambda x:x[0])
+        self.queue = high_queue[:900] + low_queue[:600]
         self.heartbeat()
         log.info("Cycle complete; queued %d pages", len(self.queue))
 
