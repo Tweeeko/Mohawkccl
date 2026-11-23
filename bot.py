@@ -372,7 +372,11 @@ def visual_scan(soup, url, finder):
         try:
             rendered, rendered_matches = browser_scan(url)
             if rendered:
-                for name, product_url in products(BeautifulSoup(rendered, "html.parser"), url):
+                rendered_soup = BeautifulSoup(rendered, "html.parser")
+                for name, product_url in price_candidates(rendered_soup, url, safe_url):
+                    finder.stats["candidates"] += 1
+                    finder.alert_once("rendered_price", product_url, "POSSIBLE £1 PC - RENDERED PRICE (VERIFY)\n" + name + "\n" + product_url)
+                for name, product_url in products(rendered_soup, url):
                     finder.alert_once("product", product_url, "CCL £1 PC PRODUCT DETECTED (rendered page)\\n" + name + "\\n" + product_url)
             matches.extend(rendered_matches)
         except Exception as exc:
