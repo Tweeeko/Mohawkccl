@@ -216,7 +216,12 @@ class Finder:
         deferred = [item for item in pending if item not in todo]
         self.queue = deferred
         limit = max(1, min(50, int(os.getenv("MAX_PAGES_PER_CYCLE", "25"))))
-        for url, priority in todo[:limit]:
+        # Reserve at least one third of requests for lower-ranked catalogue pages.
+        high_todo = [x for x in todo if x[1] >= 65]
+        low_todo = [x for x in todo if x[1] < 65]
+        low_count = min(len(low_todo), max(1, limit // 3))
+        selected = high_todo[:limit-low_count] + low_todo[:low_count]
+        for url, priority in selected:
             if self.blocked: break
             self.last_scanned[url] = time.monotonic()
             html = self.fetch(url)
@@ -296,8 +301,13 @@ class Finder:
                 log.info("Clue trail: %s (%d distinct pages)", url, len(self.clue_sources))
             self.queue.extend(links[:75])
             self.queue.extend(catalog_links(soup,url,safe_url)[:100])
+            # Product links in category grids can have opaque paths and names.
+            for card in soup.select('[data-product-id] a[href], [itemtype*="Product"] a[href], .product-card a[href], .product-item a[href]')[:120]:
+                dest = safe_url(card.get("href"),url)
+                if dest: self.queue.append((dest,45))
             self.queue.append((url, priority))
-        self.queue.extend(todo[limit:])
+        selected_set = set(selected)
+        self.queue.extend(item for item in todo if item not in selected_set)
         self.queue.extend([(BASE, 100), (urljoin(BASE, "all-deals/"), 80)])
         high_queue = sorted({x for x in self.queue if x[1] >= 65}, key=lambda x:-x[1])
         low_queue = sorted({x for x in self.queue if x[1] < 65}, key=lambda x:x[0])
