@@ -135,9 +135,14 @@ class Finder:
             if self.blocked: break
             html = self.fetch(url)
             if html is None: continue
+            source_digest = hashlib.sha256(html.encode()).hexdigest()
+            prior_source = self.db.execute("select digest from snapshots where url=?", ("source:" + url,)).fetchone()
+            source_changed = prior_source is None or prior_source[0] != source_digest
+            self.db.execute("insert or replace into snapshots values (?,?)", ("source:" + url, source_digest))
+            self.db.commit()
             findings, scripts = inspect_html(html, url, self.promotions)
             for finding in findings:
-                if finding["score"] >= 6:
+                if source_changed and finding["score"] >= 6:
                     key = hashlib.sha256((url + finding["source"] + finding["excerpt"]).encode()).hexdigest()
                     self.alert_once("evidence", key, "POSSIBLE CCL CLUE (" + finding["source"] + ", score " + str(finding["score"]) + ")\n" + finding["excerpt"] + "\n" + url)
             # Inspect a small, bounded number of same-site JavaScript assets.
@@ -155,8 +160,13 @@ class Finder:
                         self.alert_once("blocked", script_url, "CCL script access restricted; check manually: " + script_url)
                         break
                     if response.status_code == 200 and len(response.content) <= 1_000_000:
+                        js_digest = hashlib.sha256(response.content).hexdigest()
+                        prior_js = self.db.execute("select digest from snapshots where url=?", ("js:" + script_url,)).fetchone()
+                        js_changed = prior_js is None or prior_js[0] != js_digest
+                        self.db.execute("insert or replace into snapshots values (?,?)", ("js:" + script_url, js_digest))
+                        self.db.commit()
                         for finding in inspect_javascript(response.text, script_url, self.promotions):
-                            if finding["score"] >= 6:
+                            if js_changed and finding["score"] >= 6:
                                 key = hashlib.sha256((script_url + finding["excerpt"]).encode()).hexdigest()
                                 self.alert_once("script_clue", key, "POSSIBLE CCL SCRIPT CLUE (score " + str(finding["score"]) + ")\n" + finding["excerpt"] + "\n" + script_url)
                 except requests.RequestException:
