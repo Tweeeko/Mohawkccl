@@ -72,12 +72,12 @@ def browser_scan(url):
                 try:
                     if not img.is_visible(): continue
                     src = img.get_attribute("src") or ""
-                    if not safe_url(src,url): continue
+                    if not src: continue
                     score = logo_match(img.screenshot(timeout=2500))
                     if score < 12: continue
                     parent = img.locator("xpath=ancestor::a[1]")
                     href = parent.get_attribute("href") if parent.count() else url
-                    matches.append((safe_url(src,url),safe_url(href,url) or url,img.get_attribute("alt") or "",score))
+                    matches.append((urljoin(url,src),safe_url(href,url) or url,img.get_attribute("alt") or "",score))
                 except Exception:
                     continue
             return html,matches
