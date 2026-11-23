@@ -203,11 +203,16 @@ class Finder:
                     self.promotions.append(term)
 
     def cycle(self):
-        todo = sorted(set(self.queue), key=lambda x: -x[1])
-        self.queue = []
+        now = time.monotonic()
+        pending = sorted(set(self.queue), key=lambda x: -x[1])
+        # Rotate across the catalogue rather than rescanning the same high-priority pages.
+        todo = [item for item in pending if now-self.last_scanned.get(item[0],-1e9)>=600]
+        deferred = [item for item in pending if item not in todo]
+        self.queue = deferred
         limit = max(1, min(50, int(os.getenv("MAX_PAGES_PER_CYCLE", "25"))))
         for url, priority in todo[:limit]:
             if self.blocked: break
+            self.last_scanned[url] = time.monotonic()
             html = self.fetch(url)
             if html is None: continue
             source_digest = hashlib.sha256(html.encode()).hexdigest()
