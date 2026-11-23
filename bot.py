@@ -6,6 +6,7 @@ from urllib.robotparser import RobotFileParser
 from zoneinfo import ZoneInfo
 import requests
 from bs4 import BeautifulSoup
+from intelligence import inspect_html, inspect_javascript, load_promotions
 
 BASE = "https://www.cclonline.com/"
 UA = "CCLMohawkMonitor/1.0 (personal clue monitoring)"
@@ -90,6 +91,8 @@ class Finder:
         self.queue = [(BASE, 100), (urljoin(BASE, "all-deals/"), 80)]
         self.last_request = 0.0
         self.blocked = False
+        self.promotions = load_promotions()
+        self.scanned_scripts = set()
 
     def alert_once(self, kind, key, message):
         if self.db.execute("select 1 from seen where kind=? and value=?", (kind, key)).fetchone():
@@ -132,6 +135,33 @@ class Finder:
             if self.blocked: break
             html = self.fetch(url)
             if html is None: continue
+            findings, scripts = inspect_html(html, url, self.promotions)
+            for finding in findings:
+                if finding["score"] >= 6:
+                    key = hashlib.sha256((url + finding["source"] + finding["excerpt"]).encode()).hexdigest()
+                    self.alert_once("evidence", key, "POSSIBLE CCL CLUE (" + finding["source"] + ", score " + str(finding["score"]) + ")\n" + finding["excerpt"] + "\n" + url)
+            # Inspect a small, bounded number of same-site JavaScript assets.
+            for script_url in scripts[:3]:
+                if script_url in self.scanned_scripts or not self.robots.can_fetch(UA, script_url):
+                    continue
+                self.scanned_scripts.add(script_url)
+                wait = self.last_request + max(2.0, float(os.getenv("REQUEST_DELAY_SECONDS", "3"))) - time.monotonic()
+                if wait > 0: time.sleep(wait)
+                self.last_request = time.monotonic()
+                try:
+                    response = self.session.get(script_url, timeout=15, allow_redirects=False)
+                    if response.status_code in (403, 429, 503):
+                        self.blocked = True
+                        self.alert_once("blocked", script_url, "CCL script access restricted; check manually: " + script_url)
+                        break
+                    if response.status_code == 200 and len(response.content) <= 1_000_000:
+                        for finding in inspect_javascript(response.text, script_url, self.promotions):
+                            if finding["score"] >= 6:
+                                key = hashlib.sha256((script_url + finding["excerpt"]).encode()).hexdigest()
+                                self.alert_once("script_clue", key, "POSSIBLE CCL SCRIPT CLUE (score " + str(finding["score"]) + ")\n" + finding["excerpt"] + "\n" + script_url)
+                except requests.RequestException:
+                    log.warning("Script scan failed: %s", script_url)
+            if self.blocked: break
             soup = BeautifulSoup(html, "html.parser")
             for name, product_url in products(soup, url):
                 self.alert_once("product", product_url, "CCL £1 PC PRODUCT DETECTED\\n" + name + "\\n" + product_url)
