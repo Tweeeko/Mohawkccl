@@ -9,8 +9,8 @@ from bs4 import BeautifulSoup
 
 BASE = "https://www.cclonline.com/"
 UA = "CCLMohawkMonitor/1.0 (personal clue monitoring)"
-CLUE = re.compile(r"mohawk|follow the mohawk|treasure hunt|next clue|first clue|£\\s*1\\s*(?:gaming\\s*)?pc", re.I)
-PC = re.compile(r"gaming\\s+pc|desktop\\s+pc|prebuilt\\s+pc|gaming\\s+desktop|computer\\s+system", re.I)
+CLUE = re.compile(r"mohawk|follow the mohawk|treasure hunt|next clue|first clue|£\s*1\s*(?:gaming\s*)?pc", re.I)
+PC = re.compile(r"gaming\s+pc|desktop\s+pc|prebuilt\s+pc|gaming\s+desktop|computer\s+system", re.I)
 BAD = re.compile(r"/(?:basket|cart|checkout|account|login|register|wishlist)(?:/|$)", re.I)
 log = logging.getLogger("mohawk")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "9228500165")
@@ -89,6 +89,7 @@ class Finder:
             log.error("Cannot retrieve robots.txt; scanning disabled")
         self.queue = [(BASE, 100), (urljoin(BASE, "all-deals/"), 80)]
         self.last_request = 0.0
+        self.blocked = False
 
     def alert_once(self, kind, key, message):
         if self.db.execute("select 1 from seen where kind=? and value=?", (kind, key)).fetchone():
@@ -106,10 +107,19 @@ class Finder:
         self.last_request = time.monotonic()
         try:
             response = self.session.get(url, timeout=18, allow_redirects=False)
+            if response.status_code in (403, 429, 503):
+                self.blocked = True
+                self.alert_once("blocked", url, "CCL access restriction (HTTP " + str(response.status_code) + "). Check manually: " + url)
+                return None
             if response.status_code != 200: return None
             if "text/html" not in response.headers.get("content-type", ""): return None
             if len(response.content) > 2_000_000: return None
-            return response.text
+            page = response.text
+            if re.search(r"cf-chl-|cf-turnstile|checking your browser|verify you are human|captcha", page[:12000], re.I):
+                self.blocked = True
+                self.alert_once("blocked", url, "CCL human verification detected. Open manually: " + url)
+                return None
+            return page
         except requests.RequestException:
             log.exception("Fetch failed: %s", url)
             return None
@@ -119,6 +129,7 @@ class Finder:
         self.queue = []
         limit = max(1, min(50, int(os.getenv("MAX_PAGES_PER_CYCLE", "25"))))
         for url, priority in todo[:limit]:
+            if self.blocked: break
             html = self.fetch(url)
             if html is None: continue
             soup = BeautifulSoup(html, "html.parser")
