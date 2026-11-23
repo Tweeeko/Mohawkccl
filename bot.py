@@ -313,7 +313,7 @@ class Finder:
         low_queue = sorted({x for x in self.queue if x[1] < 65}, key=lambda x:x[0])
         self.queue = high_queue[:900] + low_queue[:600]
         self.heartbeat()
-        log.info("Cycle complete; queued %d pages", len(self.queue))
+        log.info("Cycle complete; pages=%d candidates=%d clue_pages=%d gemini=%d errors=%d queued=%d", self.stats["pages"],self.stats["candidates"],len(self.clue_sources),self.gemini.calls,self.stats["errors"],len(self.queue))
 
 
 # Visual scanning is optional at runtime but installed in the workflow.
